@@ -5,6 +5,7 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bodyParser = require("body-parser")
 const multer = require('multer');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -59,7 +60,7 @@ app.post('/register', async (req, res) => {
             
             if (results.length > 0) {
                 console.log('User already exists');
-                return res.status(400).json({ error: "User already exists" });
+                return res.status(400).json({ error: "User already exists Please go to login page" });
             }
 
             // Hash the password
@@ -251,13 +252,14 @@ app.post('/addCar', upload.single('image'), (req, res) => {
     }
 
     try {
-
         const SECRET_KEY = "Rental";
         const decoded = jwt.verify(token, SECRET_KEY);
 
+        // Add status = 'available' in insert
         db.query(
-            'INSERT INTO cars (brand, model_name, year, location, price_per_day, image, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [brand, model, year, location, price, image.buffer, decoded.id],
+            `INSERT INTO cars (brand, model_name, year, location, price_per_day, image, owner_id, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [brand, model, year, location, price, image.buffer, decoded.id, 'available'],
             (err, result) => {
                 if (err) {
                     console.error('Error inserting car:', err);
@@ -291,7 +293,7 @@ app.get('/profile/mycarlists', (req, res) => {
     console.log("\nVehicle listing API called");
 
     const query = `
-        SELECT users.name, users.email, cars.image, cars.brand, cars.location
+        SELECT users.name, users.email, users.image AS user_image, cars.brand, cars.model_name, cars.year, cars.location, cars.image AS car_image, cars.price_per_day, cars.status
         FROM cars
         JOIN users ON cars.owner_id = users.id
         WHERE users.id = ?
@@ -303,10 +305,114 @@ app.get('/profile/mycarlists', (req, res) => {
             return res.status(500).json({ error: "Database error" });
         }
 
+        console.log("Vehicle listing results:", results);
         res.status(200).json(results); // send the array directly
     });
 });
 
+
+app.get('/profile/mybookings', (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    const SECRET_KEY = "Rental";
+
+    if (!token) {
+        return res.status(401).json({ error: "Token not provided" });
+    }
+
+    let decoded;
+    try {
+        decoded = jwt.verify(token, SECRET_KEY);
+    } catch (err) {
+        return res.status(401).json({ error: "Invalid token" });
+    }
+
+    console.log("🔐 Authenticated User ID:", decoded.id);
+    console.log("📦 Fetching user's booking list...");
+
+    const query = `
+        SELECT 
+            bookings.id AS booking_id,
+            bookings.start_date,
+            bookings.end_date         
+        FROM bookings
+        JOIN cars ON bookings.car_id = cars.id
+        JOIN users ON bookings.renter_id = users.id
+        WHERE users.id = ?
+        ORDER BY bookings.created_at DESC
+    `;
+
+    db.query(query, [decoded.id], (err, results) => {
+        if (err) {
+            console.error('❌ Database query error:', err);
+            return res.status(500).json({ error: "Database error" });
+        }
+
+        res.status(200).json({ bookings: results });
+    });
+});
+
+app.get('/search', (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    const SECRET_KEY = "Rental";
+
+    if (!token) {
+        return res.status(401).json({ error: "Token not provided" });
+    }
+
+    let decoded;
+    try {
+        decoded = jwt.verify(token, SECRET_KEY);
+    } catch (err) {
+        return res.status(401).json({ error: "Invalid token" });
+    }
+
+    console.log("\nVehicle listing API called");
+
+    const query = `
+        SELECT users.name, users.email, users.image AS user_image, cars.brand, cars.model_name, cars.year, cars.location, cars.image AS car_image, cars.price_per_day, cars.status
+        FROM cars
+        JOIN users ON cars.owner_id = users.id
+    `;
+
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Database query error:', err);
+            return res.status(500).json({ error: "Database error" });
+        }
+
+        console.log("Vehicle listing results:", results);
+        res.status(200).json(results); // send the array directly
+    });
+});
+
+// // Set up Nodemailer transporter
+// const transporter = nodemailer.createTransport({
+//     service: 'gmail', // You can change this to your email provider (e.g., Yahoo, Outlook, etc.)
+//     auth: {
+//       user: 'barungurung00@gmail.com', // Replace with your email address
+//       pass: 'Alwaysbg@123',  // Replace with your email password or app-specific password
+//     },
+//   });
+  
+//   // Simple route to trigger the email
+//   app.get('/sendemail', (req, res) => {
+//     const mailOptions = {
+//       from: 'barungurung00@gmail.com',  // Replace with your email address
+//       to: 'barungurung97@gmail.com', // The recipient's email address
+//       subject: 'Test Email from Node.js',
+//       text: 'Hello! This is a test email sent using Nodemailer.',
+//     };
+  
+//     // Send email
+//     transporter.sendMail(mailOptions, (error, info) => {
+//       if (error) {
+//         console.log('Error sending email:', error);
+//         return res.status(500).send('Error sending email');
+//       }
+//       console.log('Email sent: ' + info.response);
+//       res.status(200).send('Email sent successfully');
+//     });
+//   });
 
 // 🚀 Start the server
 app.listen(PORT, () => {
@@ -314,3 +420,22 @@ app.listen(PORT, () => {
 });
 
 
+
+// const mysql = require('mysql2');
+
+// const db = mysql.createConnection({
+//          host: 'rentaldb.c3caeom6yp1v.eu-north-1.rds.amazonaws.com',
+//          user: 'admin',
+//          password: 'Alwaysbg123',
+//          database: 'rentaldb',
+//          port: 3306
+//      });
+
+// db.connect((err) => {
+//     if (err) {
+//         console.error('❌ Error connecting to the database:', err.stack);
+//         return;
+//     }
+//     console.log('✅ Connected to MySQL database');
+// }
+// );
