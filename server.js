@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const bodyParser = require("body-parser")
 const multer = require('multer');
 const nodemailer = require('nodemailer');
+require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -22,12 +23,21 @@ app.use(cors({ origin: '*'}));  // To allow cross-origin requests
 const storage = multer.memoryStorage(); // or diskStorage if saving files
 const upload = multer({ storage });
 
+// Nodemailer setup
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: 'noreply.allnepalrental@gmail.com',
+      pass: 'zmhjqnbdvedsnaru',
+    },
+  });
+
 // MySQL Database Connection
 const db = mysql.createConnection({
-    host: 'localhost',
-    user: 'root',
-    password: '9806714040',
-    database: 'Rental',
+    host: 'rentaldb.cql2ie0swg54.us-east-1.rds.amazonaws.com',
+    user: 'barun',
+    password: 'Alwaysbg123',
+    database: 'rental',
     port: 3306
 });
 
@@ -369,7 +379,7 @@ app.get('/search', (req, res) => {
     console.log("\nVehicle listing API called");
 
     const query = `
-        SELECT users.name, users.email, users.image AS user_image, cars.brand, cars.model_name, cars.year, cars.location, cars.image AS car_image, cars.price_per_day, cars.status
+        SELECT users.name, users.email, users.image AS user_image,cars.id, cars.brand, cars.model_name, cars.year, cars.location, cars.image AS car_image, cars.price_per_day, cars.status
         FROM cars
         JOIN users ON cars.owner_id = users.id
     `;
@@ -380,39 +390,119 @@ app.get('/search', (req, res) => {
             return res.status(500).json({ error: "Database error" });
         }
 
-        console.log("Vehicle listing results:", results);
         res.status(200).json(results); // send the array directly
     });
 });
 
-// // Set up Nodemailer transporter
-// const transporter = nodemailer.createTransport({
-//     service: 'gmail', // You can change this to your email provider (e.g., Yahoo, Outlook, etc.)
-//     auth: {
-//       user: 'barungurung00@gmail.com', // Replace with your email address
-//       pass: 'Alwaysbg@123',  // Replace with your email password or app-specific password
-//     },
-//   });
+app.get('/vehicle/:id', (req, res) => {
+    const vehicleId = req.params.id;
+
+    console.log("\nVehicle details API called");
+
+    const query = `
+        SELECT users.name, users.email, users.image AS user_image, cars.brand, cars.model_name, cars.year, cars.location, cars.image AS car_image, cars.price_per_day, cars.status
+        FROM cars
+        JOIN users ON cars.owner_id = users.id
+        WHERE cars.id = ?
+    `;
+
+    db.query(query, [vehicleId], (err, results) => {
+        if (err) {
+            console.error('Database query error:', err);
+            return res.status(500).json({ error: "Database error" });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ error: "Vehicle not found" });
+        }
+
+        res.status(200).json(results[0]); // send the first result
+    });
+})
+
+app.post('/book-vehicle', (req, res) => {
+    const { fullName, email, phone, fromDate, toDate, days, price_per_day, carId } = req.body;
   
-//   // Simple route to trigger the email
-//   app.get('/sendemail', (req, res) => {
-//     const mailOptions = {
-//       from: 'barungurung00@gmail.com',  // Replace with your email address
-//       to: 'barungurung97@gmail.com', // The recipient's email address
-//       subject: 'Test Email from Node.js',
-//       text: 'Hello! This is a test email sent using Nodemailer.',
-//     };
+    if (!fullName || !email || !phone || !fromDate || !toDate || !carId) {
+      return res.status(400).send({ message: 'All fields are required' });
+    }
   
-//     // Send email
-//     transporter.sendMail(mailOptions, (error, info) => {
-//       if (error) {
-//         console.log('Error sending email:', error);
-//         return res.status(500).send('Error sending email');
-//       }
-//       console.log('Email sent: ' + info.response);
-//       res.status(200).send('Email sent successfully');
-//     });
-//   });
+    // Get owner details using JOIN
+    const ownerQuery = `
+      SELECT users.email AS owner_email
+      FROM cars
+      JOIN users ON cars.owner_id = users.id
+      WHERE cars.id = ?
+    `;
+  
+    db.query(ownerQuery, [carId], (err, results) => {
+      if (err) {
+        console.error("❌ Error fetching owner info:", err);
+        return res.status(500).send({ message: "Database error" });
+      }
+  
+      if (results.length === 0) {
+        return res.status(404).send({ message: 'Vehicle not found' });
+      }
+  
+      const { owner_email, brand, model_name} = results[0];
+      const totalPrice = Number(Number(days) * Number(price_per_day));
+      console.log("Total Price:", totalPrice, days, price_per_day);
+      const createdAt = new Date();
+  
+      // Insert booking
+      const insertBooking = `
+        INSERT INTO bookings (renter_email, car_id, start_date, end_date, total_price, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `;
+  
+      db.query(
+        insertBooking,
+        [email, carId, fromDate, toDate, totalPrice, 'pending', createdAt],
+        (err, result) => {
+          if (err) {
+            console.error("❌ Error inserting booking:", err);
+            return res.status(500).send({ message: "Database error" });
+          }
+  
+          // Send email to owner
+          transporter.sendMail({
+            from: `"All Nepal Rental" <${process.env.EMAIL_USER}>`,
+            to: owner_email,
+            subject: `New Booking Request - ${brand} ${model_name}`,
+            html: `
+              <p><strong>${fullName}</strong> has requested to book your vehicle.</p>
+              <p><strong>Contact:</strong> ${email}, ${phone}</p>
+              <p><strong>Rental:</strong> ${fromDate} to ${toDate}</p>
+              <p><strong>Total:</strong> Rs. ${totalPrice}</p>
+            `
+          }, (err, info) => {
+            if (err) console.error("❌ Email to owner failed:", err);
+            else console.log("📨 Email sent to owner");
+          });
+  
+          // Send email to renter
+          transporter.sendMail({
+            from: `"All Nepal Rental" <${process.env.EMAIL_USER}>`,
+            to: email,
+            subject: `Booking Confirmation - ${brand} ${model_name}`,
+            html: `
+              <h2>Thank you, ${fullName}</h2>
+              <p>Your request to book <strong>${brand} ${model_name}</strong> has been sent to the owner.</p>
+              <p>Rental period: ${fromDate} to ${toDate}</p>
+              <p>Total cost: Rs. ${totalPrice}</p>
+            `
+          }, (err, info) => {
+            if (err) console.error("❌ Email to renter failed:", err);
+            else console.log("📨 Confirmation email sent to renter");
+          });
+  
+          res.status(200).send({ message: 'Booking request sent successfully.' });
+        }
+      );
+    });
+  });
+  
 
 // 🚀 Start the server
 app.listen(PORT, () => {
